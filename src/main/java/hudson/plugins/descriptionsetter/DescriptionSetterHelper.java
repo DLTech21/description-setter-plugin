@@ -20,145 +20,166 @@ import java.util.regex.Pattern;
 /**
  * Helper class that performs common functionality used by both
  * DescriptionSetterBuilder and DescriptionSetterPublisher.
- * 
  */
 public class DescriptionSetterHelper {
 
-	private static final String LOG_PREFIX = "[description-setter]";
+    private static final String LOG_PREFIX = "[description-setter]";
 
-	/**
-	 * Sets the description on the given build based on the specified regular
-	 * expression and description.
-	 *
-	 * @param build the build whose description to set.
-	 * @param listener the build listener to report events to.
-	 * @param regexp the regular expression to apply to the build log.
-	 * @param description the description to set.
-	 * @return true, regardless of if the regular expression matched and a
-	 *         description could be set or not.
-	 * @throws InterruptedException if the build is interrupted by the user.
-	 */
-	public static boolean setDescription(AbstractBuild<?, ?> build,
-			BuildListener listener, String regexp, String description)
-			throws InterruptedException {
-		return setDescription(build, listener, regexp, description, true);
-	}
+    /**
+     * Sets the description on the given build based on the specified regular
+     * expression and description.
+     *
+     * @param build       the build whose description to set.
+     * @param listener    the build listener to report events to.
+     * @param regexp      the regular expression to apply to the build log.
+     * @param description the description to set.
+     * @return true, regardless of if the regular expression matched and a
+     * description could be set or not.
+     * @throws InterruptedException if the build is interrupted by the user.
+     */
+    public static boolean setDescription(AbstractBuild<?, ?> build,
+                                         BuildListener listener, String regexp, String description)
+            throws InterruptedException {
+        return setDescription(build, listener, regexp, description, true);
+    }
 
-	/**
-	 * Sets the description on the given build based on the specified regular
-	 * expression and description.
-	 * 
-	 * @param build the build whose description to set.
-	 * @param listener the build listener to report events to.
-	 * @param regexp the regular expression to apply to the build log.
-	 * @param description the description to set.
-	 * @param appendMode if true, description is added to the current one
-	 * @return true, regardless of if the regular expression matched and a
-	 *         description could be set or not.
-	 * @throws InterruptedException if the build is interrupted by the user.
-	 */
-	public static boolean setDescription(AbstractBuild<?, ?> build,
-			BuildListener listener, String regexp, String description, boolean appendMode)
-			throws InterruptedException {
-		try {
-			Matcher matcher;
-			String result = null;
+    /**
+     * Sets the description on the given build based on the specified regular
+     * expression and description.
+     *
+     * @param build       the build whose description to set.
+     * @param listener    the build listener to report events to.
+     * @param regexp      the regular expression to apply to the build log.
+     * @param description the description to set.
+     * @param appendMode  if true, description is added to the current one
+     * @return true, regardless of if the regular expression matched and a
+     * description could be set or not.
+     * @throws InterruptedException if the build is interrupted by the user.
+     */
+    public static boolean setDescription(AbstractBuild<?, ?> build,
+                                         BuildListener listener, String regexp, String description, boolean appendMode)
+            throws InterruptedException {
+        try {
+            Matcher matcher;
+            String result = null;
+            matcher = parseLog(build.getLogFile(), regexp);
+            if (matcher != null) {
+                result = getExpandedDescription(matcher, description);
+                result = build.getEnvironment(listener).expand(result);
+            } else {
+                if (result == null && regexp == null && description != null) {
+                    result = description;
+                }
+            }
+            boolean pgyer = Boolean.valueOf(build.getEnvironment(listener).expand("${pgyer}"));
+            if (matcher != null && pgyer) {
+                result = getExpandedDescription(matcher, description);
+                result = build.getEnvironment(listener).expand(result);
+            } else {
+                if (result == null && regexp == null && description != null) {
+                    result = description;
+                } else if (!pgyer && description != null) {
+                    String[] a = description.split("###");
+                    if (a != null && a.length >= 2) {
+                        result = a[1];
+                        listener.getLogger().println("" + result);
+                        result = result.replace("${BUILD_NUMBER}", build.getNumber()+"");
+                    }
+                }
+            }
 
-			matcher = parseLog(build.getLogFile(), regexp);
-			if (matcher != null) {
-				result = getExpandedDescription(matcher, description);
-				result = build.getEnvironment(listener).expand(result);
-			} else {
-				if (result == null && regexp == null && description != null) {
-					result = description;
-				}
-			}
+            if (result == null) {
+                listener.getLogger().println(
+                        LOG_PREFIX + " Could not determine description.");
+                return true;
+            }
 
-			if (result == null) {
-				listener.getLogger().println(
-						LOG_PREFIX + " Could not determine description.");
-				return true;
-			}
+            result = urlify(result);
+            listener.getLogger().println(
+                    LOG_PREFIX + result);
+            if (pgyer && result != null) {
+                String[] a = result.split("###");
+                if (a != null && a.length >= 1) {
+                    result = a[0];
+                }
+            }
+            build.addAction(new DescriptionSetterAction(result));
 
-			result = urlify(result);
+            if (build.getDescription() == null)
+                build.setDescription(result);
+            else
+                build.setDescription((appendMode ? build.getDescription() + "<br />" : "") + result);
 
-			build.addAction(new DescriptionSetterAction(result));
-			if(build.getDescription() == null)
-				build.setDescription(result);
-			else
-				build.setDescription((appendMode ? build.getDescription() + "<br />" : "") + result);
+            setEnvironmentVariable(result, build);
 
-			setEnvironmentVariable(result, build);
+            listener.getLogger().println(LOG_PREFIX + " Description set: " + result);
+        } catch (IOException e) {
+            e.printStackTrace(listener.error(LOG_PREFIX
+                    + " Error while parsing logs for description-setter"));
+        }
 
-			listener.getLogger().println(LOG_PREFIX + " Description set: " + result);
-		} catch (IOException e) {
-			e.printStackTrace(listener.error(LOG_PREFIX
-					+ " Error while parsing logs for description-setter"));
-		}
+        return true;
+    }
 
-		return true;
-	}
-	
-	private static void setEnvironmentVariable(String result, AbstractBuild<?, ?> build)
-	{
-		List<ParameterValue> params = new ArrayList<ParameterValue>();
-		params.add(new StringParameterValue("DESCRIPTION_SETTER_DESCRIPTION", result));
-		build.addAction(new ParametersAction(params));
-	}
+    private static void setEnvironmentVariable(String result, AbstractBuild<?, ?> build) {
+        List<ParameterValue> params = new ArrayList<ParameterValue>();
+        params.add(new StringParameterValue("DESCRIPTION_SETTER_DESCRIPTION", result));
+        build.addAction(new ParametersAction(params));
+    }
 
-	private static Matcher parseLog(File logFile, String regexp)
-			throws IOException, InterruptedException {
+    private static Matcher parseLog(File logFile, String regexp)
+            throws IOException, InterruptedException {
 
-		if (regexp == null) {
-			return null;
-		}
+        if (regexp == null) {
+            return null;
+        }
 
-		// Assume default encoding and text files
-		String line;
-		Pattern pattern = Pattern.compile(regexp);
-		BufferedReader reader = null;
-		try {
-			reader = new BufferedReader(new FileReader(logFile));
-			while ((line = reader.readLine()) != null) {
-				Matcher matcher = pattern.matcher(line);
-				if (matcher.find()) {
-					return matcher;
-				}
-			}
-		} finally {
-			if (reader != null) {
-				reader.close();
-			}
-		}
-		return null;
-	}
+        // Assume default encoding and text files
+        String line;
+        Pattern pattern = Pattern.compile(regexp);
+        BufferedReader reader = null;
+        try {
+            reader = new BufferedReader(new FileReader(logFile));
+            while ((line = reader.readLine()) != null) {
+                Matcher matcher = pattern.matcher(line);
+                if (matcher.find()) {
+                    return matcher;
+                }
+            }
+        } finally {
+            if (reader != null) {
+                reader.close();
+            }
+        }
+        return null;
+    }
 
-	private static String getExpandedDescription(Matcher matcher,
-			String description) {
-		String result = description;
-		if (result == null) {
-			if (matcher.groupCount() == 0) {
-				result = "\\0";
-			} else {
-				result = "\\1";
-			}
-		}
+    private static String getExpandedDescription(Matcher matcher,
+                                                 String description) {
+        String result = description;
+        if (result == null) {
+            if (matcher.groupCount() == 0) {
+                result = "\\0";
+            } else {
+                result = "\\1";
+            }
+        }
 
-		// Expand all groups: 1..Count, as well as 0 for the entire pattern
-		for (int i = matcher.groupCount(); i >= 0; i--) {
-			result =
-					result.replace("\\" + i,
-							matcher.group(i) == null ? "" : matcher.group(i));
-		}
-		return result;
-	}
+        // Expand all groups: 1..Count, as well as 0 for the entire pattern
+        for (int i = matcher.groupCount(); i >= 0; i--) {
+            result =
+                    result.replace("\\" + i,
+                            matcher.group(i) == null ? "" : matcher.group(i));
+        }
+        return result;
+    }
 
-	private static String urlify(String text) {
-		try {
-			new URL(text);
-			return String.format("<a href=\"%s\">%s</a>", text, text);
-		} catch (MalformedURLException e) {
-			return text;
-		}
-	}
+    private static String urlify(String text) {
+        try {
+            new URL(text);
+            return String.format("<a href=\"%s\">%s</a>", text, text);
+        } catch (MalformedURLException e) {
+            return text;
+        }
+    }
 }
