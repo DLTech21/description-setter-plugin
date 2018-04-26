@@ -82,7 +82,6 @@ public class DescriptionSetterHelper {
                     String[] a = description.split("###");
                     if (a != null && a.length >= 2) {
                         result = a[1];
-                        listener.getLogger().println("" + result);
                         result = result.replace("${BUILD_NUMBER}", build.getNumber() + "");
                         result = result.replace("${JENKINS_URL}", build.getEnvironment(listener).get("JENKINS_URL"));
                         result = result.replace("${JOB_NAME}", build.getEnvironment(listener).get("JOB_NAME"));
